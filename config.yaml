@@ -1,0 +1,29 @@
+# Example config.yaml for BreakingNewsEffects
+feeds:
+  - name: La Nación
+    url: https://www.lanacion.com.ar/rss.xml
+    refresh_interval: 120
+
+  - name: BBC News
+    url: http://feeds.bbci.co.uk/news/world/rss.xml
+    refresh_interval: 120
+
+  - name: BBC News
+    url: http://feeds.bbci.co.uk/news/world/rss.xml
+    refresh_interval: 120
+  
+  - name: Reuters
+    url: https://www.reutersagency.com/feed/?taxonomy=best-topics&post_type=best
+    refresh_interval: 180
+  
+  - name: CNN
+    url: http://rss.cnn.com/rss/edition.rss
+    refresh_interval: 200
+  
+  - name: Al Jazeera
+    url: https://www.aljazeera.com/xml/rss/all.xml
+    refresh_interval: 150
+  
+  - name: Associated Press
+    url: https://storage.googleapis.com/afs-prod/feeds/science.rss.xml
+    refresh_interval: 240
