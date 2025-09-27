@@ -85,7 +85,7 @@ def news_monitor(config):
     try:
         while display.is_running() and threads:
             display.update()
-            clock.tick(60)  # 60 FPS
+            clock.tick(display.target_fps)  # Use the display's target FPS (30 FPS for lower CPU usage)
     except KeyboardInterrupt:
         print("Shutting down news monitor")
     finally:

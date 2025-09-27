@@ -24,7 +24,7 @@ except Exception as e:
 class ScrollingNewsDisplay:
     """A display for scrolling news headlines using pygame with Syphon output"""
 
-    def __init__(self, width=800, height=600, bg_color=(0, 0, 0, 0), text_color=(255, 255, 255)):
+    def __init__(self, width=1280, height=360, bg_color=(0, 0, 0, 0), text_color=(255, 255, 255)):
         # Initialize pygame in the main thread
         pygame.init()
 
@@ -40,7 +40,7 @@ class ScrollingNewsDisplay:
         pygame.display.gl_set_attribute(pygame.GL_ALPHA_SIZE, 8)
 
         # Set up Syphon with full HD resolution
-        self.syphon_width = 1920
+        self.syphon_width = 3840
         self.syphon_height = 1080
         self.syphon_server = None
         self.syphon_texture = None
@@ -89,16 +89,33 @@ class ScrollingNewsDisplay:
         self.bg_color = bg_color
         self.text_color = text_color
         self.default_font = pygame.font.Font(None, 48)  # Default font size
+        self.breaking_font = pygame.font.Font(
+            None, 60)  # Cache breaking news font
 
         # Initialize a queue for news items
         self.news_queue = queue.Queue()
         self.current_news = None
-        self.current_x = self.width  # Start off screen
-        self.scroll_speed = 3
+        self.current_x_float = float(self.width)  # Use float for sub-pixel precision
+        self.scroll_speed = 2.5  # Slightly slower but smoother scroll speed
 
         # For thread safety
         self.running = True
         self.lock = threading.Lock()
+
+        # Performance optimizations - cache surfaces
+        self.cached_breaking_text = None
+        self.cached_text_bg = None
+        self.cached_red_bar = None
+        self.last_window_size = (width, height)
+
+        # Text surface caching for scrolling news
+        self.text_surface_cache = {}
+        self.max_cache_size = 20  # Limit cache size
+
+        # Frame rate control for smooth scrolling
+        self.target_fps = 60  # Keep 60 FPS for smooth text scrolling
+        self.syphon_update_counter = 0
+        self.syphon_update_interval = 4  # Update Syphon every 4 frames (15 FPS) to maintain performance
 
     def show_news(self, text):
         """Add a news item to the queue"""
@@ -122,22 +139,33 @@ class ScrollingNewsDisplay:
         # Clear the screen with transparent background
         self.screen.fill((0, 0, 0, 0))
 
-        # Create a red bar at the bottom of the screen (news channel style)
-        bar_height = 80  # Height of the red bottom bar
-        red_bar = pygame.Surface((self.width, bar_height), pygame.SRCALPHA)
-        red_bar.fill((200, 0, 0, 220))  # Semi-transparent red
+        # Cache surfaces to improve performance - only recreate when window size changes
+        current_size = (self.width, self.height)
+        if self.last_window_size != current_size or self.cached_red_bar is None:
+            # Create a red bar at the bottom of the screen (news channel style)
+            bar_height = 40  # Height of the red bottom bar
+            self.cached_red_bar = pygame.Surface(
+                (self.width, bar_height), pygame.SRCALPHA)
+            self.cached_red_bar.fill((200, 0, 0, 220))  # Semi-transparent red
 
-        # Draw "BREAKING NEWS" text with a prominent style
-        # Larger font size for better visibility
-        breaking_font = pygame.font.Font(None, 60)
-        breaking_text = breaking_font.render(
-            "BREAKING NEWS", True, (255, 255, 0))  # Changed to yellow text for better contrast
+            # Draw "BREAKING NEWS" text with a prominent style
+            self.cached_breaking_text = self.breaking_font.render(
+                "BREAKING NEWS", True, (255, 255, 0))  # Yellow text for better contrast
 
-        # Create a background for the text
+            # Create a background for the text
+            padding = 15
+            self.cached_text_bg = pygame.Surface((self.cached_breaking_text.get_width(
+            ) + padding*2, self.cached_breaking_text.get_height() + padding), pygame.SRCALPHA)
+            # Semi-transparent red background for the text
+            self.cached_text_bg.fill((200, 0, 0, 200))
+
+            self.last_window_size = current_size
+
+        bar_height = 40
+        red_bar = self.cached_red_bar
+        breaking_text = self.cached_breaking_text
+        text_bg = self.cached_text_bg
         padding = 15
-        text_bg = pygame.Surface((breaking_text.get_width(
-        ) + padding*2, breaking_text.get_height() + padding), pygame.SRCALPHA)
-        text_bg.fill((200, 0, 0))  # Solid red background for the text
 
         # Position the text in a more prominent position (top left)
         breaking_text_x = 20
@@ -157,33 +185,65 @@ class ScrollingNewsDisplay:
         # Process news items
         if self.current_news is None and not self.news_queue.empty():
             self.current_news = self.news_queue.get()
-            self.current_x = self.width  # Start off screen
+            self.current_x_float = float(self.width)  # Start off screen with float precision
 
-        # Render the current news item
+        # Render the current news item with caching
         if self.current_news:
-            text_surface = self.default_font.render(
-                self.current_news, True, self.text_color)
+            # Check cache first
+            if self.current_news in self.text_surface_cache:
+                text_surface = self.text_surface_cache[self.current_news]
+            else:
+                # Render and cache the text surface
+                text_surface = self.default_font.render(
+                    self.current_news, True, self.text_color)
+
+                # Manage cache size
+                if len(self.text_surface_cache) >= self.max_cache_size:
+                    # Remove oldest entry (simple FIFO)
+                    oldest_key = next(iter(self.text_surface_cache))
+                    del self.text_surface_cache[oldest_key]
+
+                self.text_surface_cache[self.current_news] = text_surface
+
             text_width = text_surface.get_width()
 
             # Place text in the red bar (vertically centered in the bar)
             y_pos = bottom_y + (bar_height - text_surface.get_height()) // 2
 
-            # Draw the text
-            self.screen.blit(text_surface, (self.current_x, y_pos))
+            # Draw the text using integer position from float calculation
+            current_x_int = int(self.current_x_float)
+            self.screen.blit(text_surface, (current_x_int, y_pos))
 
-            # Scroll the text
-            self.current_x -= self.scroll_speed
+            # Scroll the text with sub-pixel precision
+            # Adaptive speed: longer text scrolls slightly slower for readability
+            adaptive_speed = self.scroll_speed
+            if len(self.current_news) > 80:  # Long headlines
+                adaptive_speed = self.scroll_speed * 0.8
+            elif len(self.current_news) > 120:  # Very long headlines
+                adaptive_speed = self.scroll_speed * 0.7
+                
+            self.current_x_float -= adaptive_speed
 
             # If text has scrolled completely off screen, reset
-            if self.current_x < -text_width:
+            if self.current_x_float < -text_width:
                 self.current_news = None  # Ready for next news item
 
         # Update the display
         pygame.display.update()
 
-        # If Syphon is available, send the frame
-        if SYPHON_AVAILABLE and self.syphon_server:
+        # Optimize Syphon updates - only send every few frames to reduce CPU usage
+        self.syphon_update_counter += 1
+        should_update_syphon = self.syphon_update_counter >= self.syphon_update_interval
+
+        if should_update_syphon:
+            self.syphon_update_counter = 0
+
+        # If Syphon is available, send the frame (but less frequently)
+        if SYPHON_AVAILABLE and self.syphon_server and should_update_syphon:
             try:
+                # Clear the Syphon surface with transparent background first
+                self.syphon_surface.fill((0, 0, 0, 0))
+
                 # Scale the pygame surface to Syphon dimensions
                 pygame.transform.scale(
                     self.screen,
@@ -214,8 +274,13 @@ class ScrollingNewsDisplay:
 
                     # Copy the RGB values
                     rgba_array[:, :, 0:3] = rgb_array_t
-                    # Copy the alpha values (instead of setting to 255)
+                    # Copy the alpha values - preserve transparency
                     rgba_array[:, :, 3] = alpha_array_t
+
+                    # Ensure truly transparent pixels (alpha = 0) have zero RGB values
+                    transparent_mask = alpha_array_t == 0
+                    # Set all channels to 0 for transparent pixels
+                    rgba_array[transparent_mask, :] = 0
 
                     # Send to Syphon
                     self.copy_to_texture(rgba_array, self.syphon_texture)
