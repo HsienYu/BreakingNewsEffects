@@ -143,40 +143,15 @@ class ScrollingNewsDisplay:
         current_size = (self.width, self.height)
         if self.last_window_size != current_size or self.cached_red_bar is None:
             # Create a red bar at the bottom of the screen (news channel style)
-            bar_height = 40  # Height of the red bottom bar
+            bar_height = 60  # Height of the red bottom bar
             self.cached_red_bar = pygame.Surface(
                 (self.width, bar_height), pygame.SRCALPHA)
             self.cached_red_bar.fill((200, 0, 0, 220))  # Semi-transparent red
 
-            # Draw "BREAKING NEWS" text with a prominent style
-            self.cached_breaking_text = self.breaking_font.render(
-                "BREAKING NEWS", True, (255, 255, 0))  # Yellow text for better contrast
-
-            # Create a background for the text
-            padding = 15
-            self.cached_text_bg = pygame.Surface((self.cached_breaking_text.get_width(
-            ) + padding*2, self.cached_breaking_text.get_height() + padding), pygame.SRCALPHA)
-            # Semi-transparent red background for the text
-            self.cached_text_bg.fill((200, 0, 0, 200))
-
             self.last_window_size = current_size
 
-        bar_height = 40
+        bar_height = 60
         red_bar = self.cached_red_bar
-        breaking_text = self.cached_breaking_text
-        text_bg = self.cached_text_bg
-        padding = 15
-
-        # Position the text in a more prominent position (top left)
-        breaking_text_x = 20
-        breaking_text_y = 20  # Position at the top of the screen
-
-        # Blit the background first
-        self.screen.blit(text_bg, (breaking_text_x - padding,
-                         breaking_text_y - padding//2))
-
-        # Draw the text on the screen
-        self.screen.blit(breaking_text, (breaking_text_x, breaking_text_y))
 
         # Blit the red bar at the bottom of the screen
         bottom_y = self.height - bar_height
