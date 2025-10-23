@@ -186,6 +186,9 @@ Thumbs.db
 doc/
 docs/build/
 
+# NTN24 scraper cache
+ntn24_cache/
+
 # IDE and Editor files
 .vscode/
 .idea/

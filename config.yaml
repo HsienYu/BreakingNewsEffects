@@ -1,6 +1,17 @@
 # Example config.yaml for BreakingNewsEffects
 # Optimized for lower resource usage
+
+# Display Settings
+transparent_background: false  # Set to true for transparent overlay mode
+green_screen: true             # Set to true for green screen chroma key (overrides transparent_background)
+                               # In OBS: Add Spout2 source → Right-click → Filters → Chroma Key
+                               # Set Key Color Type to "Green" and adjust Similarity/Smoothness as needed
 feeds:
+  # NTN24 - Colombian News (scraped from website)
+  - name: NTN24
+    type: ntn24
+    cache_dir: ntn24_cache
+    refresh_interval: 600  # 10 minutes
 
   - name: BBC News
     url: http://feeds.bbci.co.uk/news/world/rss.xml
@@ -21,3 +32,20 @@ feeds:
   - name: Associated Press
     url: https://storage.googleapis.com/afs-prod/feeds/science.rss.xml
     refresh_interval: 480  # 8 minutes
+
+# Video Streaming Settings
+# Priority: Spout (Windows) > NDI (cross-platform) > HTTP/UDP fallback
+# Spout is the easiest to set up on Windows and works with OBS, Resolume, etc.
+ndi:
+  enabled: true  # Set to false to disable all streaming output
+  sender_name: "Breaking News Effects"  # Name that appears in receivers
+  width: 1920    # Output resolution width
+  height: 1080   # Output resolution height
+  fps: 30        # Frame rate (frames per second)
+  
+  # Spout-specific settings (Windows only)
+  spout_flip_mode: "both"  # "none", "vertical", "horizontal", "both" - fixes orientation
+  
+  # Fallback options when Spout and NDI are not available
+  fallback_method: "http"  # "http" or "udp" - HTTP creates a web viewable stream
+  fallback_port: 8080      # Port for fallback streaming (HTTP: 8080, UDP: 8888)

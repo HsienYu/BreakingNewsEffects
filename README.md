@@ -1,14 +1,18 @@
-# BreakingNewsEffects
+# Breaking News Effects
 
-A real-time RSS news ticker application that displays breaking news as scrolling text, with optional Syphon output for macOS systems.
+A real-time breaking news ticker application with multiple professional video streaming options.
 
-## Features
+## 🎯 Features
 
 - **Real-time RSS Monitoring**: Automatically fetches news from multiple RSS feeds
-- **Scrolling News Ticker**: Displays breaking news in a scrolling text format
-- **Syphon Integration**: Sends the video output to other applications on macOS via Syphon
-- **Configurable Feed Sources**: Easily configure multiple news sources via YAML
-- **Customizable Refresh Rates**: Set different refresh intervals for each news source
+- **Professional Ticker Display**: Clean, broadcast-quality scrolling news ticker
+- **Multiple Streaming Options**: 
+  - 🥇 **Spout** (Windows) - Best option for Windows users
+  - 🥈 **NDI** (Cross-platform) - Professional broadcast standard
+  - 🥉 **Syphon** (macOS) - Native macOS video sharing
+  - 📡 **HTTP/UDP Streaming** - Universal fallback option
+- **Automatic Fallback**: Tries the best available streaming method automatically
+- **Configurable**: Easy YAML configuration for feeds and streaming settings
 
 ## Requirements
 

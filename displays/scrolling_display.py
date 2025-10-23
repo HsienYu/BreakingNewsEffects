@@ -5,6 +5,9 @@ import time
 import pygame
 import threading
 import queue
+from .ndi_sender import NDISender, is_ndi_available
+from .simple_streamer import create_simple_streamer
+from .spout_sender import SpoutSender, is_spout_available
 
 # Properly import Syphon for macOS
 SYPHON_AVAILABLE = False
@@ -22,9 +25,10 @@ except Exception as e:
 
 
 class ScrollingNewsDisplay:
-    """A display for scrolling news headlines using pygame with Syphon output"""
+    """A display for scrolling news headlines using pygame with Syphon and NDI output"""
 
-    def __init__(self, width=1280, height=360, bg_color=(0, 0, 0, 0), text_color=(255, 255, 255)):
+    def __init__(self, width=1280, height=360, bg_color=(0, 0, 0, 0), text_color=(255, 255, 255),
+                 ndi_config=None, transparent_bg=True, green_screen=False):
         # Initialize pygame in the main thread
         pygame.init()
 
@@ -85,18 +89,122 @@ class ScrollingNewsDisplay:
                 print(f"Error setting up Syphon: {e}")
                 SYPHON_AVAILABLE = False
 
+        # Set up video streaming (Spout > NDI > Simple Streamer)
+        self.spout_sender = None
+        self.spout_enabled = False
+        self.ndi_sender = None
+        self.ndi_enabled = False
+        self.simple_streamer = None
+        self.streaming_enabled = False
+        
+        if ndi_config is None:
+            ndi_config = {}
+        
+        # Default NDI/streaming configuration
+        streaming_defaults = {
+            'enabled': True,
+            'sender_name': 'Breaking News Effects',
+            'width': 1920,
+            'height': 1080,
+            'fps': 30,
+            'fallback_method': 'http',  # 'http' or 'udp' for simple streaming
+            'fallback_port': 8080
+        }
+        
+        # Merge user config with defaults
+        streaming_settings = {**streaming_defaults, **ndi_config}
+        
+        if streaming_settings.get('enabled', True):
+            # Try Spout first (best for Windows)
+            if is_spout_available():
+                try:
+                    self.spout_sender = SpoutSender(
+                        sender_name=streaming_settings['sender_name'],
+                        width=streaming_settings['width'],
+                        height=streaming_settings['height'],
+                        flip_mode=streaming_settings.get('spout_flip_mode', 'both')
+                    )
+                    
+                    if self.spout_sender.is_initialized:
+                        self.spout_enabled = True
+                        self.streaming_enabled = True
+                        print(f"🎯 Spout sender enabled: {streaming_settings['sender_name']}")
+                        print("   Compatible with OBS Studio, Resolume, TouchDesigner, etc.")
+                    else:
+                        self.spout_sender = None
+                        print("❌ Spout sender failed to initialize")
+                        
+                except Exception as e:
+                    print(f"❌ Error setting up Spout sender: {e}")
+                    self.spout_sender = None
+            
+            # If Spout failed, try NDI as backup
+            if not self.spout_enabled and is_ndi_available():
+                try:
+                    print("🔄 Spout not available, trying NDI...")
+                    self.ndi_sender = NDISender(
+                        sender_name=streaming_settings['sender_name'],
+                        width=streaming_settings['width'],
+                        height=streaming_settings['height'],
+                        frame_rate=(streaming_settings['fps'], 1)
+                    )
+                    
+                    if self.ndi_sender.is_initialized:
+                        self.ndi_enabled = True
+                        self.streaming_enabled = True
+                        print(f"✅ NDI sender enabled: {streaming_settings['sender_name']}")
+                    else:
+                        self.ndi_sender = None
+                        print("❌ NDI sender failed to initialize")
+                        
+                except Exception as e:
+                    print(f"❌ Error setting up NDI sender: {e}")
+                    self.ndi_sender = None
+            
+            # If both Spout and NDI failed, try simple streamer as fallback
+            if not self.spout_enabled and not self.ndi_enabled:
+                try:
+                    print("🔄 Spout and NDI not available, trying simple streamer fallback...")
+                    self.simple_streamer = create_simple_streamer(
+                        stream_name=streaming_settings['sender_name'],
+                        method=streaming_settings.get('fallback_method', 'http'),
+                        port=streaming_settings.get('fallback_port', 8080),
+                        width=streaming_settings['width'],
+                        height=streaming_settings['height'],
+                        fps=streaming_settings['fps']
+                    )
+                    
+                    if self.simple_streamer and self.simple_streamer.is_initialized:
+                        self.streaming_enabled = True
+                        method = streaming_settings.get('fallback_method', 'http')
+                        port = streaming_settings.get('fallback_port', 8080)
+                        if method == 'http':
+                            print(f"✅ HTTP streamer enabled at http://localhost:{port}/")
+                        else:
+                            print(f"✅ UDP streamer enabled on port {port}")
+                    else:
+                        self.simple_streamer = None
+                        print("❌ Simple streamer failed to initialize")
+                        
+                except Exception as e:
+                    print(f"❌ Error setting up simple streamer: {e}")
+                    self.simple_streamer = None
+
         # Set up text properties
         self.bg_color = bg_color
         self.text_color = text_color
-        self.default_font = pygame.font.Font(None, 48)  # Default font size
+        self.transparent_bg = transparent_bg
+        self.green_screen = green_screen
+        self.default_font = pygame.font.Font(None, 28)  # Smaller font (was 48)
         self.breaking_font = pygame.font.Font(
-            None, 60)  # Cache breaking news font
+            None, 60)  # Cache breaking news font (not used anymore)
 
-        # Initialize a queue for news items
-        self.news_queue = queue.Queue()
+        # Initialize scrolling text (bottom bar only)
+        self.scrolling_queue = []  # Queue for bottom scrolling text
         self.current_news = None
         self.current_x_float = float(self.width)  # Use float for sub-pixel precision
-        self.scroll_speed = 2.5  # Slightly slower but smoother scroll speed
+        self.scroll_speed = 2.5  # Scroll speed for scrolling text
+        self.current_scrolling_index = 0  # Track which news item is scrolling
 
         # For thread safety
         self.running = True
@@ -118,8 +226,9 @@ class ScrollingNewsDisplay:
         self.syphon_update_interval = 4  # Update Syphon every 4 frames (15 FPS) to maintain performance
 
     def show_news(self, text):
-        """Add a news item to the queue"""
-        self.news_queue.put(text)
+        """Add a news item to the scrolling queue"""
+        if text not in self.scrolling_queue:  # Avoid duplicates
+            self.scrolling_queue.append(text)
 
     def update(self):
         """Update the display - should be called in the main loop"""
@@ -136,72 +245,93 @@ class ScrollingNewsDisplay:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
 
-        # Clear the screen with transparent background
-        self.screen.fill((0, 0, 0, 0))
+        # Clear the screen with appropriate background
+        if self.green_screen:
+            self.screen.fill((0, 255, 0, 255))  # Pure green for chroma key
+        elif self.transparent_bg:
+            self.screen.fill((0, 0, 0, 0))  # Transparent
+        else:
+            self.screen.fill((0, 0, 0, 255))  # Black background
 
         # Cache surfaces to improve performance - only recreate when window size changes
         current_size = (self.width, self.height)
+        bar_height = 25  # Thinner bar (was 40)
+        
         if self.last_window_size != current_size or self.cached_red_bar is None:
-            # Create a red bar at the bottom of the screen (news channel style)
-            bar_height = 60  # Height of the red bottom bar
+            # Create a thinner red bar at the bottom of the screen
             self.cached_red_bar = pygame.Surface(
                 (self.width, bar_height), pygame.SRCALPHA)
             self.cached_red_bar.fill((200, 0, 0, 220))  # Semi-transparent red
 
             self.last_window_size = current_size
 
-        bar_height = 60
         red_bar = self.cached_red_bar
 
-        # Blit the red bar at the bottom of the screen
+        # Draw the red bar at the bottom based on mode
         bottom_y = self.height - bar_height
-        self.screen.blit(red_bar, (0, bottom_y))
+        if self.green_screen:
+            # For green screen: use opaque red bar (will be visible against green)
+            self.screen.blit(red_bar, (0, bottom_y))
+        elif self.transparent_bg:
+            # Make red bar very transparent for overlay use
+            transparent_bar = pygame.Surface((self.width, bar_height), pygame.SRCALPHA)
+            transparent_bar.fill((200, 0, 0, 100))  # Very transparent red (100/255 = ~40% opacity)
+            self.screen.blit(transparent_bar, (0, bottom_y))
+        else:
+            # Use original semi-transparent red bar
+            self.screen.blit(red_bar, (0, bottom_y))
 
-        # Process news items
-        if self.current_news is None and not self.news_queue.empty():
-            self.current_news = self.news_queue.get()
-            self.current_x_float = float(self.width)  # Start off screen with float precision
-
-        # Render the current news item with caching
-        if self.current_news:
-            # Check cache first
-            if self.current_news in self.text_surface_cache:
-                text_surface = self.text_surface_cache[self.current_news]
-            else:
-                # Render and cache the text surface
-                text_surface = self.default_font.render(
-                    self.current_news, True, self.text_color)
-
-                # Manage cache size
-                if len(self.text_surface_cache) >= self.max_cache_size:
-                    # Remove oldest entry (simple FIFO)
-                    oldest_key = next(iter(self.text_surface_cache))
-                    del self.text_surface_cache[oldest_key]
-
-                self.text_surface_cache[self.current_news] = text_surface
-
-            text_width = text_surface.get_width()
-
-            # Place text in the red bar (vertically centered in the bar)
-            y_pos = bottom_y + (bar_height - text_surface.get_height()) // 2
-
-            # Draw the text using integer position from float calculation
-            current_x_int = int(self.current_x_float)
-            self.screen.blit(text_surface, (current_x_int, y_pos))
-
-            # Scroll the text with sub-pixel precision
-            # Adaptive speed: longer text scrolls slightly slower for readability
-            adaptive_speed = self.scroll_speed
-            if len(self.current_news) > 80:  # Long headlines
-                adaptive_speed = self.scroll_speed * 0.8
-            elif len(self.current_news) > 120:  # Very long headlines
-                adaptive_speed = self.scroll_speed * 0.7
+        # Render scrolling text in bottom bar
+        if self.scrolling_queue:
+            # Get next item to scroll if current is done
+            if self.current_news is None:
+                if self.current_scrolling_index < len(self.scrolling_queue):
+                    self.current_news = self.scrolling_queue[self.current_scrolling_index]
+                    self.current_x_float = float(self.width)
+                else:
+                    # Restart from beginning
+                    self.current_scrolling_index = 0
+                    self.current_news = self.scrolling_queue[0]
+                    self.current_x_float = float(self.width)
+            
+            # Render scrolling text
+            if self.current_news:
+                if self.current_news in self.text_surface_cache:
+                    text_surface = self.text_surface_cache[self.current_news]
+                else:
+                    text_surface = self.default_font.render(
+                        self.current_news, True, self.text_color)
+                    
+                    if len(self.text_surface_cache) >= self.max_cache_size:
+                        oldest_key = next(iter(self.text_surface_cache))
+                        del self.text_surface_cache[oldest_key]
+                    
+                    self.text_surface_cache[self.current_news] = text_surface
                 
-            self.current_x_float -= adaptive_speed
-
-            # If text has scrolled completely off screen, reset
-            if self.current_x_float < -text_width:
-                self.current_news = None  # Ready for next news item
+                text_width = text_surface.get_width()
+                
+                # Position in the bottom bar (vertically centered)
+                y_pos = bottom_y + (bar_height - text_surface.get_height()) // 2
+                
+                # Draw the scrolling text
+                current_x_int = int(self.current_x_float)
+                self.screen.blit(text_surface, (current_x_int, y_pos))
+                
+                # Scroll with adaptive speed
+                adaptive_speed = self.scroll_speed
+                if len(self.current_news) > 80:
+                    adaptive_speed = self.scroll_speed * 0.8
+                elif len(self.current_news) > 120:
+                    adaptive_speed = self.scroll_speed * 0.7
+                
+                self.current_x_float -= adaptive_speed
+                
+                # If scrolled completely off screen, move to next item
+                if self.current_x_float < -text_width:
+                    self.current_news = None
+                    self.current_scrolling_index += 1
+                    if self.current_scrolling_index >= len(self.scrolling_queue):
+                        self.current_scrolling_index = 0  # Loop back
 
         # Update the display
         pygame.display.update()
@@ -270,6 +400,21 @@ class ScrollingNewsDisplay:
                     self.syphon_server.publish_frame(self.syphon_texture)
             except Exception as e:
                 print(f"Error publishing to Syphon: {e}")
+        
+        # Send frame to streaming service if enabled
+        if self.streaming_enabled:
+            try:
+                if self.spout_enabled and self.spout_sender:
+                    # Send Spout frames every update for smooth motion
+                    self.spout_sender.send_pygame_surface(self.screen)
+                elif self.ndi_enabled and self.ndi_sender and should_update_syphon:
+                    # NDI can be less frequent (heavier processing)
+                    self.ndi_sender.send_pygame_surface(self.screen)
+                elif self.simple_streamer and should_update_syphon:
+                    # HTTP/UDP can be less frequent
+                    self.simple_streamer.send_pygame_surface(self.screen)
+            except Exception as e:
+                print(f"Error sending streaming frame: {e}")
 
     def is_running(self):
         """Check if the display is still running"""
@@ -285,6 +430,25 @@ class ScrollingNewsDisplay:
                 self.syphon_server.stop()
             except Exception as e:
                 print(f"Error stopping Syphon server: {e}")
+        
+        # Clean up streaming services
+        if self.spout_enabled and self.spout_sender:
+            try:
+                self.spout_sender.stop()
+            except Exception as e:
+                print(f"Error stopping Spout sender: {e}")
+        
+        if self.ndi_enabled and self.ndi_sender:
+            try:
+                self.ndi_sender.stop()
+            except Exception as e:
+                print(f"Error stopping NDI sender: {e}")
+        
+        if self.simple_streamer:
+            try:
+                self.simple_streamer.stop()
+            except Exception as e:
+                print(f"Error stopping simple streamer: {e}")
 
         # Clean up pygame
         pygame.quit()
